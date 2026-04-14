@@ -2,18 +2,21 @@ name: Dnevni izvještaj
 
 on:
   schedule:
-    - cron: '30 5 * * *'
+    - cron: '30 5 * * *'   # 07:30 Sarajevo (CEST = UTC+2)
+    - cron: '30 17 * * *'  # 19:30 Sarajevo (CEST = UTC+2)
   workflow_dispatch:
 
 jobs:
   send-digest:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -r requirements.txt
+      - name: Instaliraj zavisnosti
+        run: pip install -r requirements.txt
       - name: Pokreni
         env:
           OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}

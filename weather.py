@@ -1,89 +1,115 @@
 """
-weather.py — Dohvatanje vremenske prognoze za Sarajevo
-Koristi OpenWeatherMap API (besplatni tier).
+weather.py — Vremenska prognoza za Sarajevo.
+Danas + 3-dnevna prognoza + podaci za seeing procjenu.
 """
 
 import os
+import logging
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
+from collections import defaultdict, Counter
 
-CITY   = "Sarajevo"
-LAT    = 43.8563
-LON    = 18.4131
-UNITS  = "metric"
-LANG   = "hr"
+logger = logging.getLogger(__name__)
 
-CONDITION_ICONS = {
+LAT   = 43.8563
+LON   = 18.4131
+UNITS = "metric"
+LANG  = "hr"
+
+DAYS_BS = ["Ponedjeljak","Utorak","Srijeda","Četvrtak","Petak","Subota","Nedjelja"]
+
+ICONS = {
     "Thunderstorm": "⛈️", "Drizzle": "🌦️", "Rain": "🌧️",
     "Snow": "❄️", "Clear": "☀️", "Clouds": "☁️",
     "Mist": "🌫️", "Fog": "🌫️", "Haze": "🌫️",
+    "Smoke": "🌫️", "Dust": "🌪️", "Tornado": "🌪️",
 }
 
-def _get_icon(main):
-    return CONDITION_ICONS.get(main, "🌡️")
+def _icon(main): return ICONS.get(main, "🌡️")
 
 
 def fetch_weather():
     api_key = os.getenv("OPENWEATHER_API_KEY")
-
-    # Ako nema API ključa ili ključ nije aktivan — vrati placeholder
     if not api_key:
         return _placeholder()
 
-    url = (
-        f"https://api.openweathermap.org/data/2.5/weather"
-        f"?lat={LAT}&lon={LON}&appid={api_key}&units={UNITS}&lang={LANG}"
-    )
-    fore_url = (
-        f"https://api.openweathermap.org/data/2.5/forecast"
-        f"?lat={LAT}&lon={LON}&appid={api_key}&units={UNITS}&lang={LANG}&cnt=8"
-    )
-
+    cur_url  = (f"https://api.openweathermap.org/data/2.5/weather"
+                f"?lat={LAT}&lon={LON}&appid={api_key}&units={UNITS}&lang={LANG}")
+    fore_url = (f"https://api.openweathermap.org/data/2.5/forecast"
+                f"?lat={LAT}&lon={LON}&appid={api_key}&units={UNITS}&lang={LANG}&cnt=40")
     try:
-        cur  = requests.get(url,      timeout=10).json()
+        cur  = requests.get(cur_url,  timeout=10).json()
         fore = requests.get(fore_url, timeout=10).json()
 
-        # Provjeri da li API vraca grešku (neaktivan ključ, itd.)
         if "main" not in cur:
-            error_msg = cur.get("message", "API greška")
-            print(f"[UPOZORENJE] OpenWeatherMap: {error_msg} — koristim placeholder podatke")
+            logger.warning(f"OWM: {cur.get('message','API greška')} — placeholder")
             return _placeholder()
 
-        today_temps = [i["main"]["temp"] for i in fore.get("list", [])]
-        sunrise = datetime.fromtimestamp(cur["sys"]["sunrise"]).strftime("%H:%M")
-        sunset  = datetime.fromtimestamp(cur["sys"]["sunset"]).strftime("%H:%M")
+        # ── Danas ─────────────────────────────────────────────
+        today_items = [i for i in fore.get("list", [])
+                       if datetime.fromtimestamp(i["dt"]).date() == datetime.now().date()]
+        all_items   = fore.get("list", [])
+
+        temps       = [i["main"]["temp"] for i in (today_items or all_items[:8])]
+        cloud_pct   = cur.get("clouds", {}).get("all", 100)
+        wind_ms     = cur.get("wind", {}).get("speed", 0)
+        humidity    = cur["main"].get("humidity", 0)
+        sunrise     = datetime.fromtimestamp(cur["sys"]["sunrise"]).strftime("%H:%M")
+        sunset      = datetime.fromtimestamp(cur["sys"]["sunset"]).strftime("%H:%M")
+
+        # ── 3-dnevna prognoza ─────────────────────────────────
+        days = defaultdict(list)
+        for item in all_items:
+            days[datetime.fromtimestamp(item["dt"]).date()].append(item)
+
+        forecast_3day = []
+        today = datetime.now().date()
+        for offset in range(1, 4):
+            target = today + timedelta(days=offset)
+            items  = days.get(target, [])
+            if not items:
+                continue
+            t = [i["main"]["temp"] for i in items]
+            mains = [i["weather"][0]["main"] for i in items]
+            descs = [i["weather"][0]["description"] for i in items]
+            main_w = Counter(mains).most_common(1)[0][0]
+            forecast_3day.append({
+                "day_name":    DAYS_BS[target.weekday()],
+                "date_str":    target.strftime("%d.%m."),
+                "temp_min":    round(min(t)),
+                "temp_max":    round(max(t)),
+                "icon":        _icon(main_w),
+                "description": Counter(descs).most_common(1)[0][0].capitalize(),
+            })
 
         return {
-            "city":        CITY,
-            "icon":        _get_icon(cur["weather"][0]["main"]),
-            "temp":        round(cur["main"]["temp"]),
-            "feels_like":  round(cur["main"].get("feels_like", cur["main"]["temp"])),
-            "temp_min":    round(min(today_temps)) if today_temps else round(cur["main"]["temp_min"]),
-            "temp_max":    round(max(today_temps)) if today_temps else round(cur["main"]["temp_max"]),
-            "description": cur["weather"][0]["description"].capitalize(),
-            "humidity":    cur["main"].get("humidity", 0),
-            "wind_kmh":    round(cur.get("wind", {}).get("speed", 0) * 3.6, 1),
-            "sunrise":     sunrise,
-            "sunset":      sunset,
+            "city":           "Sarajevo",
+            "icon":           _icon(cur["weather"][0]["main"]),
+            "temp":           round(cur["main"]["temp"]),
+            "feels_like":     round(cur["main"].get("feels_like", cur["main"]["temp"])),
+            "temp_min":       round(min(temps)) if temps else "N/A",
+            "temp_max":       round(max(temps)) if temps else "N/A",
+            "description":    cur["weather"][0]["description"].capitalize(),
+            "humidity":       humidity,
+            "wind_kmh":       round(wind_ms * 3.6, 1),
+            "cloud_pct":      cloud_pct,
+            "sunrise":        sunrise,
+            "sunset":         sunset,
+            "forecast_3day":  forecast_3day,
         }
 
     except Exception as e:
-        print(f"[UPOZORENJE] Greška pri dohvatanju vremena: {e} — koristim placeholder")
+        logger.error(f"Greška pri dohvatanju vremena: {e}")
         return _placeholder()
 
 
 def _placeholder():
-    """Vraća placeholder podatke kada API nije dostupan."""
     return {
-        "city":        CITY,
-        "icon":        "🌤️",
-        "temp":        "N/A",
-        "feels_like":  "N/A",
-        "temp_min":    "N/A",
-        "temp_max":    "N/A",
-        "description": "Prognoza nedostupna (API ključ se aktivira)",
-        "humidity":    "N/A",
-        "wind_kmh":    "N/A",
-        "sunrise":     "N/A",
-        "sunset":      "N/A",
+        "city": "Sarajevo", "icon": "🌤️",
+        "temp": "N/A", "feels_like": "N/A",
+        "temp_min": "N/A", "temp_max": "N/A",
+        "description": "Prognoza nedostupna (API ključ se aktivira do 2h)",
+        "humidity": "N/A", "wind_kmh": "N/A",
+        "cloud_pct": 100, "sunrise": "N/A", "sunset": "N/A",
+        "forecast_3day": [],
     }

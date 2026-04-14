@@ -1,151 +1,156 @@
 """
-news.py — Dohvatanje vijesti po kategorijama
-Kombinirani pristup: NewsAPI.org + RSS feeds za lokalne izvore.
+news.py — Dohvatanje vijesti isključivo putem RSS feedova.
+Bez NewsAPI-ja — pouzdaniji izvori, bolje filtrirane vijesti.
 """
 
-import os
 import logging
-from datetime import datetime, timezone
-from typing import Optional
-
-import requests
 import feedparser
 
 logger = logging.getLogger(__name__)
 
-NEWS_API_BASE = "https://newsapi.org/v2/everything"
-MAX_ARTICLES  = 5  # Broj članaka po kategoriji
+MAX_ARTICLES = 5
 
-
-# ---------------------------------------------------------------------------
-# RSS feed definicije (lokalni / regionalni BiH/Sarajevo)
-# ---------------------------------------------------------------------------
-RSS_FEEDS = {
+RSS_SOURCES = {
+    "ai": [
+        "https://feeds.feedburner.com/venturebeat/SZYF",        # VentureBeat AI
+        "https://www.artificialintelligence-news.com/feed/",     # AI News
+        "https://techcrunch.com/category/artificial-intelligence/feed/",
+        "https://www.technologyreview.com/feed/",                # MIT Tech Review
+        "https://openai.com/blog/rss/",                         # OpenAI Blog
+    ],
     "sarajevo": [
         "https://www.klix.ba/rss/vijesti/sarajevo",
+        "https://radiosarajevo.ba/feed",
         "https://www.oslobodjenje.ba/rss",
-        "https://www.radiosarajevo.ba/rss",
     ],
     "bih": [
         "https://www.klix.ba/rss/vijesti/bih",
-        "https://www.oslobodjenje.ba/rss",
         "https://ba.n1info.com/feed/",
+        "https://www.oslobodjenje.ba/rss",
+        "https://radiosarajevo.ba/feed",
+    ],
+    "geopolitics": [
+        "http://feeds.bbci.co.uk/news/world/rss.xml",            # BBC World
+        "https://feeds.reuters.com/reuters/worldNews",           # Reuters World
+        "https://rss.dw.com/rdf/rss-en-world",                  # Deutsche Welle
+        "https://www.aljazeera.com/xml/rss/all.xml",            # Al Jazeera
+    ],
+    "astronomy": [
+        "https://www.nasa.gov/rss/dyn/breaking_news.rss",        # NASA
+        "https://www.space.com/feeds/all",                       # Space.com
+        "https://www.universetoday.com/feed/",                   # Universe Today
+        "https://skyandtelescope.org/feed/",                     # Sky & Telescope
+    ],
+    "astrophotography": [
+        "https://apod.nasa.gov/apod.rss",                        # NASA APOD
+        "https://astrobackyard.com/feed/",                       # AstroBackyard
+        "https://www.skyatnightmagazine.com/feeds/all",          # Sky at Night
+        "https://www.space.com/feeds/all",                       # Space.com
     ],
 }
 
-# ---------------------------------------------------------------------------
-# NewsAPI upiti po kategoriji
-# ---------------------------------------------------------------------------
-NEWSAPI_QUERIES = {
-    "ai": {
-        "label": "Umjetna Inteligencija",
-        "q": '("artificial intelligence" OR "machine learning" OR "ChatGPT" OR "LLM" OR "OpenAI" OR "Gemini" OR "Claude AI")',
-        "language": "en",
-        "sortBy": "publishedAt",
-    },
-    "geopolitics": {
-        "label": "Geopolitika i sukobi",
-        "q": '(war OR conflict OR crisis OR "military operation" OR "geopolitical" OR Ukraine OR Gaza OR Syria OR Sudan)',
-        "language": "en",
-        "sortBy": "publishedAt",
-    },
-    "astronomy": {
-        "label": "Astronomija",
-        "q": '(astronomy OR "space telescope" OR NASA OR ESA OR "black hole" OR "exoplanet" OR "solar system" OR "deep space")',
-        "language": "en",
-        "sortBy": "publishedAt",
-    },
-    "astrophotography": {
-        "label": "Astrofotografija",
-        "q": '(astrophotography OR "astronomical imaging" OR "telescope imaging" OR "deep sky object" OR "nebula photograph" OR "APOD")',
-        "language": "en",
-        "sortBy": "publishedAt",
-    },
-}
+# Ključne riječi za filtriranje loših rezultata
+FILTER_OUT = [
+    "pypi", "package", "release 0.", "version 0.", "npm",
+    "casino", "gambling", "bet", "crypto", "bitcoin", "nft",
+    "forex", "stock tip", "price prediction",
+]
+
+# Ključne riječi koje MORAJU biti u AI vijestima
+AI_KEYWORDS = [
+    "artificial intelligence", "machine learning", "deep learning",
+    "neural network", "chatgpt", "openai", "anthropic", "claude",
+    "gemini", "llm", "large language", "generative ai", "gpt",
+    "ai model", "robot", "automation", "nvidia ai", "google ai",
+    "meta ai", "microsoft ai", "ai research", "ai tool",
+    "ai agent", "ai system", "ai chip", "ai startup",
+]
 
 
-# ---------------------------------------------------------------------------
-# NewsAPI dohvatanje
-# ---------------------------------------------------------------------------
-def _fetch_newsapi(query_cfg: dict) -> list[dict]:
-    api_key = os.getenv("NEWS_API_KEY")
-    if not api_key:
-        logger.warning("NEWS_API_KEY nije postavljen — preskačem NewsAPI.")
-        return []
-
-    params = {
-        "apiKey":   api_key,
-        "q":        query_cfg["q"],
-        "language": query_cfg.get("language", "en"),
-        "sortBy":   query_cfg.get("sortBy", "publishedAt"),
-        "pageSize": MAX_ARTICLES,
-    }
-    try:
-        resp = requests.get(NEWS_API_BASE, params=params, timeout=10)
-        resp.raise_for_status()
-        articles = resp.json().get("articles", [])
-        return [
-            {
-                "title":  a.get("title", ""),
-                "source": a.get("source", {}).get("name", ""),
-                "url":    a.get("url", ""),
-                "desc":   a.get("description") or "",
-            }
-            for a in articles
-            if a.get("title") and "[Removed]" not in a.get("title", "")
-        ][:MAX_ARTICLES]
-    except Exception as e:
-        logger.error(f"NewsAPI greška ({query_cfg.get('label')}): {e}")
-        return []
+def _is_relevant_ai(title: str, desc: str) -> bool:
+    text = (title + " " + desc).lower()
+    has_ai = any(kw in text for kw in AI_KEYWORDS)
+    has_bad = any(kw in text for kw in FILTER_OUT)
+    return has_ai and not has_bad
 
 
-# ---------------------------------------------------------------------------
-# RSS dohvatanje
-# ---------------------------------------------------------------------------
-def _fetch_rss(feed_urls: list[str]) -> list[dict]:
+def _is_clean(title: str) -> bool:
+    title_lower = title.lower()
+    return not any(kw in title_lower for kw in FILTER_OUT)
+
+
+def _fetch_rss(urls: list, max_items: int = MAX_ARTICLES,
+               filter_fn=None) -> list:
     articles = []
-    seen_titles: set[str] = set()
+    seen = set()
 
-    for url in feed_urls:
+    for url in urls:
+        if len(articles) >= max_items:
+            break
         try:
             feed = feedparser.parse(url)
-            for entry in feed.entries[:MAX_ARTICLES]:
+            for entry in feed.entries:
                 title = entry.get("title", "").strip()
-                if not title or title in seen_titles:
+                if not title or title in seen:
                     continue
-                seen_titles.add(title)
+
+                desc = entry.get("summary", "")
+                if isinstance(desc, str):
+                    # Ukloni HTML tagove iz opisa
+                    import re
+                    desc = re.sub(r"<[^>]+>", "", desc)[:200]
+
+                if filter_fn and not filter_fn(title, desc):
+                    continue
+
+                if not _is_clean(title):
+                    continue
+
+                seen.add(title)
                 articles.append({
                     "title":  title,
                     "source": feed.feed.get("title", url),
                     "url":    entry.get("link", ""),
-                    "desc":   entry.get("summary", "")[:200] if entry.get("summary") else "",
+                    "desc":   desc,
                 })
+
+                if len(articles) >= max_items:
+                    break
+
         except Exception as e:
             logger.warning(f"RSS greška ({url}): {e}")
 
-    # Deduplikacija i ograničenje
-    return articles[:MAX_ARTICLES]
+    return articles
 
 
-# ---------------------------------------------------------------------------
-# Javni API
-# ---------------------------------------------------------------------------
-def fetch_all_news() -> dict[str, list[dict]]:
-    """
-    Vraća rječnik kategorija s listom članaka.
-    Struktura: { "ai": [...], "sarajevo": [...], "bih": [...], ... }
-    """
+def fetch_all_news() -> dict:
     results = {}
 
-    # NewsAPI kategorije
-    for key, cfg in NEWSAPI_QUERIES.items():
-        results[key] = _fetch_newsapi(cfg)
-        logger.info(f"  {cfg['label']}: {len(results[key])} članaka")
+    # AI — sa strogim filterom
+    results["ai"] = _fetch_rss(
+        RSS_SOURCES["ai"],
+        filter_fn=_is_relevant_ai
+    )
+    logger.info(f"  AI: {len(results['ai'])} članaka")
 
-    # RSS lokalne vijesti
-    results["sarajevo"] = _fetch_rss(RSS_FEEDS["sarajevo"])
-    results["bih"]      = _fetch_rss(RSS_FEEDS["bih"])
-    logger.info(f"  Sarajevo (RSS): {len(results['sarajevo'])} članaka")
-    logger.info(f"  BiH (RSS):      {len(results['bih'])} članaka")
+    # Sarajevo lokalne
+    results["sarajevo"] = _fetch_rss(RSS_SOURCES["sarajevo"])
+    logger.info(f"  Sarajevo: {len(results['sarajevo'])} članaka")
+
+    # BiH nacionalne
+    results["bih"] = _fetch_rss(RSS_SOURCES["bih"])
+    logger.info(f"  BiH: {len(results['bih'])} članaka")
+
+    # Geopolitika
+    results["geopolitics"] = _fetch_rss(RSS_SOURCES["geopolitics"])
+    logger.info(f"  Geopolitika: {len(results['geopolitics'])} članaka")
+
+    # Astronomija
+    results["astronomy"] = _fetch_rss(RSS_SOURCES["astronomy"])
+    logger.info(f"  Astronomija: {len(results['astronomy'])} članaka")
+
+    # Astrofotografija
+    results["astrophotography"] = _fetch_rss(RSS_SOURCES["astrophotography"])
+    logger.info(f"  Astrofotografija: {len(results['astrophotography'])} članaka")
 
     return results

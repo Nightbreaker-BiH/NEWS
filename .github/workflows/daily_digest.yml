@@ -2,8 +2,8 @@ name: Dnevni izvještaj
 
 on:
   schedule:
-    - cron: '30 5 * * *'   # 07:30 Sarajevo (CEST = UTC+2)
-    - cron: '30 17 * * *'  # 19:30 Sarajevo (CEST = UTC+2)
+    - cron: '30 5 * * *'    # 07:30 Sarajevo (CEST = UTC+2)
+    - cron: '30 17 * * *'   # 19:30 Sarajevo (CEST = UTC+2)
   workflow_dispatch:
 
 jobs:
